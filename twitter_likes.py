@@ -30,41 +30,30 @@ def getLastId():
     return config["DEFAULT"]["last_id"]
 
 
-def getFavorites(prev_id):
+def getFavorites():
     # user_id (int) id of user
     # since_id (int) returns tweets more recent than this id
     # max_id (int) returns tweets older than this id
     # count (int) max 200
 
-    if prev_id == "":  # first time running script
-        timeline = new_timeline = api.GetFavorites(
+    timeline = new_timeline = api.GetFavorites(
+        screen_name=screen_name, count=200, include_entities=False, return_json=True,
+    )
+    tweet_count = len(timeline)
+    total = tweet_count
+    max_id = timeline[tweet_count - 1]["id"]
+    while tweet_count > 1:
+        new_timeline = api.GetFavorites(
             screen_name=screen_name,
             count=200,
+            max_id=max_id,
             include_entities=False,
             return_json=True,
         )
-        tweet_count = len(timeline)
-        total = tweet_count
-        max_id = timeline[tweet_count - 1]["id"]
-        while tweet_count > 1:
-            new_timeline = api.GetFavorites(
-                screen_name=screen_name,
-                count=200,
-                max_id=max_id,
-                include_entities=False,
-                return_json=True,
-            )
-            tweet_count = len(new_timeline)
-            total += tweet_count
-            max_id = new_timeline[tweet_count - 1]["id"]
-            timeline += new_timeline
-    else:
-        timeline = api.GetFavorites(
-            screen_name=screen_name,
-            count=200,
-            include_entities=False,
-            return_json=True,
-        )
+        tweet_count = len(new_timeline)
+        total += tweet_count
+        max_id = new_timeline[tweet_count - 1]["id"]
+        timeline += new_timeline
     return timeline
 
 
@@ -118,12 +107,14 @@ def downloadMedia(id, media_type, name, url):
         print(str(r.status_code) + " error downloading tweet with id: " + id)
     else:
         try:
-            os.mkdir(screen_name)
+            os.mkdir(os.path.join("downloads", screen_name))
         except OSError as exc:
             if exc.errno != errno.EEXIST:
                 raise
             pass
-        with open(os.path.join(currentPath, screen_name, name + ext), "wb") as f:
+        with open(
+            os.path.join(currentPath, "downloads", screen_name, name + ext), "wb"
+        ) as f:
             for chunk in r.iter_content(chunk_size=1024):
                 if chunk:
                     f.write(chunk)
@@ -131,74 +122,70 @@ def downloadMedia(id, media_type, name, url):
 
 def updateArchive(archive):
     with open(
-        os.path.join(currentPath, screen_name + "-archive.json"), "w", encoding="utf-8"
+        os.path.join(currentPath, "archives", screen_name + ".json"),
+        "w",
+        encoding="utf-8",
     ) as f:
         json.dump(archive, f, ensure_ascii=False, indent=4)
 
 
+def loadArchive():
+    for i in range(5):
+        try:
+            with open(
+                os.path.join(currentPath, "archives", screen_name + ".json"),
+                "r",
+                encoding="utf-8",
+            ) as f:
+                archive = json.load(f)
+        except FileNotFoundError:
+            with open(
+                os.path.join(currentPath, "archives", screen_name + ".json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump(dict(), f, ensure_ascii=False, indent=4)
+            continue
+        break
+    return archive
+
+
 def main():
-    # last_id = getLastId()
-    # temp_last_id = last_id
-    timeline = getFavorites("")
-    with open(
-        os.path.join(currentPath, screen_name + "-archive.json"), "r", encoding="utf-8"
-    ) as f:
-        archive = json.load(f)
+    timeline = getFavorites()
+    archive = loadArchive()
     favorites = []
-    if True:
-        for idx, tweet in enumerate(timeline):
-            if idx == 0:
-                temp_last_id = tweet["id"]
-            #     print(last_id)
-            #     print(temp_last_id)
-            # if last_id == tweet["id_str"]:
-            #     break
-            if "extended_entities" in tweet:
-                id = tweet["id_str"]
-                if id in archive:
-                    continue
-                if id not in archive:
-                    archive[id] = None
-                    favorites.append(getTweetData(tweet))
-        print(str(len(favorites)) + " new images/videos")
-        for tweet in favorites:
-            tweet_id = tweet["id_str"]
-            date = (
-                "["
-                + time.strftime(
-                    "%Y-%m-%d",
-                    time.strptime(tweet["created_at"], "%a %b %d %H:%M:%S +0000 %Y"),
-                )
-                + "] "
+    for idx, tweet in enumerate(timeline):
+        if "extended_entities" in tweet:
+            id = tweet["id_str"]
+            if id in archive:
+                continue
+            if id not in archive:
+                archive[id] = None
+                favorites.append(getTweetData(tweet))
+    print(str(len(favorites)) + " new images/videos")
+    for tweet in favorites:
+        tweet_id = tweet["id_str"]
+        date = (
+            "["
+            + time.strftime(
+                "%Y-%m-%d",
+                time.strptime(tweet["created_at"], "%a %b %d %H:%M:%S +0000 %Y"),
             )
-            for idx, media in enumerate(tweet["media"]):
-                # really messy way to create the filename
-                # could change this so it's just the tweet id or something
-                # i wanted to keep a part of the text of the tweet so there's some context to the image/video
-                # which requires removing characters and things that can't be in filenames
-                # current format is [date] tweet text - image#.ext
-                filename = re.sub("[^\\w0-9 ]", " ", tweet["tweet"]) + "\n"
-                filename = re.sub("http.+[\\s|\n]", "", filename)
-                filename = re.sub(" +", " ", filename)
-                filename = filename[  # cut the tweet length because of long path errors in windows
-                    :140
-                ]
-                # filename = tweet_id #UNCOMMENT THIS LINE FOR TWEET ID AS FILENAME
-                filename = date + filename + " - " + str(idx)
-                downloadMedia(
-                    tweet_id, media["type"], filename, media["url"],
-                )
-    else:
-        with open(
-            os.path.join(currentPath, "timeline.json"), "w", encoding="utf-8"
-        ) as f:
-            json.dump(timeline, f, ensure_ascii=False, indent=4)
+            + "] "
+        )
+        for idx, media in enumerate(tweet["media"]):
+            filename = re.sub("[^\\w0-9 ]", " ", tweet["tweet"]) + "\n"
+            filename = re.sub("http.+[\\s|\n]", "", filename)
+            filename = re.sub(" +", " ", filename)
+            filename = filename[  # cut the tweet length because of long path errors in windows
+                :140
+            ]
+            # filename = tweet_id #UNCOMMENT THIS LINE FOR TWEET ID AS FILENAME
+            filename = date + filename + " - " + str(idx)
+            downloadMedia(
+                tweet_id, media["type"], filename, media["url"],
+            )
     updateArchive(archive)
-    # with open(os.path.join(currentPath, "favorites.json"), "w", encoding="utf-8") as f:
-    #     json.dump(favorites, f, ensure_ascii=False, indent=4)
-    # config["DEFAULT"]["last_id"] = str(temp_last_id)
-    # with open(os.path.join(currentPath, "twitter_lists.ini"), "w") as configFile:
-    #     config.write(configFile)
 
 
 main()
