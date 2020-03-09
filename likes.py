@@ -13,6 +13,8 @@ class Likes:
         self._screen_name = screen_name
         self._current_path = current_path
         self._force_redownload = force_redownload
+        self._archives_path = os.path.join(current_path, "archives")
+        self._downloads_path = os.path.join(current_path, "downloads", screen_name)
 
     def loadArchive(self):
         """
@@ -24,9 +26,7 @@ class Likes:
         """
         try:
             with open(
-                os.path.join(
-                    self._current_path, "archives", self._screen_name + ".json"
-                ),
+                os.path.join(self._archives_path, self._screen_name + ".json"),
                 "r",
                 encoding="utf-8",
             ) as f:
@@ -46,7 +46,16 @@ class Likes:
             archive = dict()
         return archive
 
-    def getFavorites(self):
+    def getFavorites(self, max_id):
+        return self._api.GetFavorites(
+            screen_name=self._screen_name,
+            count=200,
+            max_id=max_id,
+            include_entities=False,
+            return_json=True,
+        )
+
+    def getAllFavorites(self):
         """
             Retrieves all liked tweets on an account 200 at a time 
             (75 requests/15min = 15000 liked tweets/15min max)
@@ -56,18 +65,13 @@ class Likes:
         total = 0
         max_id = 0
         while tweet_count > 1:
-            new_timeline = self._api.GetFavorites(
-                screen_name=self._screen_name,
-                count=200,
-                max_id=max_id,
-                include_entities=False,
-                return_json=True,
-            )
+            new_timeline = self.getFavorites(max_id)
             tweet_count = len(new_timeline)
             if tweet_count > 1:
                 total += tweet_count
                 max_id = new_timeline[tweet_count - 1]["id"]
-                timeline += new_timeline
+                new_timeline.reverse()
+                timeline = new_timeline + timeline
         print("found " + str(total) + " liked tweets")
         return timeline
 
@@ -108,7 +112,7 @@ class Likes:
                     info["media"].append(
                         {
                             "id_str": media["id_str"],
-                            "url": media["media_url_https"],
+                            "url": media["media_url_https"] + ":large",
                             "type": media_type,
                         }
                     )
@@ -127,15 +131,13 @@ class Likes:
             print(str(r.status_code) + " error downloading tweet with id: " + id)
         else:
             try:
-                os.mkdir(os.path.join("downloads", self._screen_name))
+                os.makedirs(os.path.join("downloads", self._screen_name))
             except OSError as e:
                 if e.errno != errno.EEXIST:
                     raise
                 pass
             filename = name + ext
-            file_path = os.path.join(
-                self._current_path, "downloads", self._screen_name, filename
-            )
+            file_path = os.path.join(self._downloads_path, filename)
             if os.path.exists(file_path) == False:
                 with open(file_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=1024 * 1024 * 10):
@@ -148,64 +150,92 @@ class Likes:
         """
             Update archive file for user with new liked tweets
         """
-        with open(
-            os.path.join(self._current_path, "archives", self._screen_name + ".json"),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump(archive, f, ensure_ascii=False, indent=4)
+        while True:
+            try:
+                with open(
+                    os.path.join(self._archives_path, self._screen_name + ".json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump(archive, f, ensure_ascii=False, indent=4)
+                break
+            except FileNotFoundError:
+                try:
+                    os.makedirs(self._archives_path)
+                    continue
+                except FileExistsError:
+                    pass
 
-    def writeFavorites(self, timeline, favorites):
-        """
-            Writes all liked tweets to timeline.json with all data from api
-            Adds new liked tweets to favorites.json with a lot less data
-        """
+    def writeTimeline(self, timeline):
+        # Writes new liked tweets to timeline.json with all data from api
+        try:
+            with open(
+                os.path.join(self._downloads_path, "timeline.json"),
+                "r",
+                encoding="utf-8",
+            ) as f:
+                old_timeline = json.load(f)
+        except FileNotFoundError:
+            old_timeline = []
+        while True:
+            try:
+                with open(
+                    os.path.join(self._downloads_path, "timeline.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump(old_timeline + timeline, f, ensure_ascii=False, indent=4)
+                break
+            except FileNotFoundError:
+                os.makedirs(self._downloads_path)
+                continue
+
+    def writeFavorites(self, favorites):
+        "Adds new liked tweets to favorites.json with a lot less data"
+        try:
+            with open(
+                os.path.join(self._downloads_path, "favorites.json"),
+                "r",
+                encoding="utf-8",
+            ) as f:
+                old_favorites = json.load(f)
+        except FileNotFoundError:
+            old_favorites = []
+
         with open(
-            os.path.join(
-                self._current_path, "downloads", self._screen_name, "timeline.json"
-            ),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump(timeline, f, ensure_ascii=False, indent=4)
-        with open(
-            os.path.join(
-                self._current_path, "downloads", self._screen_name, "favorites.json"
-            ),
-            "r",
-            encoding="utf-8",
-        ) as f:
-            old_favorites = json.load(f)
-        with open(
-            os.path.join(
-                self._current_path, "downloads", self._screen_name, "favorites.json"
-            ),
-            "w",
-            encoding="utf-8",
+            os.path.join(self._downloads_path, "favorites.json"), "w", encoding="utf-8",
         ) as f:
             json.dump(old_favorites + favorites, f, ensure_ascii=False, indent=4)
 
+    def writeTweetData(self, timeline, favorites):
+        self.writeTimeline(timeline)
+        self.writeFavorites(favorites)
+
     def reset(self):
         with open(
-            os.path.join(self._current_path, "archives", self._screen_name + ".json"),
+            os.path.join(self._archives_path, self._screen_name + ".json"),
             "w",
             encoding="utf-8",
         ) as f:
             json.dump(dict(), f, ensure_ascii=False, indent=4)
-        with open(
-            os.path.join(
-                self._current_path, "downloads", self._screen_name, "favorites.json"
-            ),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump([], f, ensure_ascii=False, indent=4)
+        while True:
+            try:
+                with open(
+                    os.path.join(self._downloads_path, "favorites.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump([], f, ensure_ascii=False, indent=4)
+                break
+            except FileNotFoundError:
+                os.makedirs(self._downloads_path)
 
     def download(self):
         if self._force_redownload:
             self.reset()
         archive = self.loadArchive()
-        timeline = self.getFavorites()
+        timeline = self.getAllFavorites()
+        new_tweets = []
         favorites = []
 
         for idx, tweet in enumerate(timeline):
@@ -215,6 +245,7 @@ class Likes:
                     continue
                 else:
                     archive[id] = None
+                    new_tweets.append(tweet)
                     favorites.append(self.getTweetData(tweet))
 
         print(str(len(favorites)) + " new favorites with images/videos")
@@ -237,11 +268,12 @@ class Likes:
                 filename = filename[  # cut the tweet length because of long path errors in windows
                     :140
                 ]
-                # filename = tweet_id #UNCOMMENT THIS LINE FOR TWEET ID AS FILENAME
                 filename = date + filename + " - " + tweet_id + " - " + str(idx)
+                # filename = tweet_id #UNCOMMENT THIS LINE FOR TWEET ID AS FILENAME
                 self.downloadMedia(
                     tweet_id, media["type"], filename, media["url"],
                 )
-        self.writeFavorites(timeline, favorites)
+        self.writeTweetData(new_tweets, favorites)
         self.updateArchive(archive)
         print("done")
+
