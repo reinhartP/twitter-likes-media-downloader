@@ -87,7 +87,7 @@ class Likes:
             "tweet": tweet["full_text"],
             "media": [],
         }
-        if "media" in tweet["extended_entities"]:
+        if "extended_entities" in tweet and "media" in tweet["extended_entities"]:
             for media in tweet["extended_entities"]["media"]:
                 media_type = media["type"]
                 if media_type == "video" or media_type == "animated_gif":
@@ -118,15 +118,12 @@ class Likes:
                     )
         return info
 
-    def downloadMedia(self, id, media_type, name, url):
+    def downloadMedia(self, id, filename, url):
         """
             Downloads media specified at url
             Files are downloaded to a folder with the name "screen_name" in the downloads folder
         """
         r = requests.get(url, stream=True)
-        ext = ".mp4"
-        if media_type == "photo":
-            ext = ".jpg"
         if r.status_code != 200:
             print(str(r.status_code) + " error downloading tweet with id: " + id)
         else:
@@ -136,7 +133,6 @@ class Likes:
                 if e.errno != errno.EEXIST:
                     raise
                 pass
-            filename = name + ext
             file_path = os.path.join(self._downloads_path, filename)
             if os.path.exists(file_path) == False:
                 with open(file_path, "wb") as f:
@@ -230,6 +226,36 @@ class Likes:
             except FileNotFoundError:
                 os.makedirs(self._downloads_path)
 
+    def getFilename(self, date, tweet, idx, id, media_type):
+        tweet_id = tweet["id_str"]
+        ext = ".mp4"
+        if media_type == "photo":
+            ext = ".jpg"
+        if not id:
+            # filename = re.sub("[^\\w# :\/\.]", " ", tweet["tweet"])
+            tweet_text = re.sub(r'[\\*?"<>|~]', " ", tweet["tweet"])
+            tweet_text = re.sub(r"https?\S+", "", tweet_text)
+            # filename = re.sub("[^\\w#]", " ", filename)
+            tweet_text = re.sub(r"\n|:|/", " ", tweet_text).strip()
+            tweet_text = re.sub(r" +", " ", tweet_text)
+            tweet_text_length = 250 - (
+                len(date + " - " + tweet_id + " - " + str(idx)) + 4
+            )
+            filename = (
+                date
+                + tweet_text[  # cut the tweet length because of long path errors in windows
+                    :tweet_text_length
+                ]
+                + " - "
+                + tweet_id
+                + " - "
+                + str(idx)
+                + ext
+            )
+            return filename
+
+        return tweet_id
+
     def download(self):
         if self._force_redownload:
             self.reset()
@@ -239,14 +265,13 @@ class Likes:
         favorites = []
 
         for idx, tweet in enumerate(timeline):
-            if "extended_entities" in tweet:
-                id = tweet["id_str"]
-                if id in archive:
-                    continue
-                else:
-                    archive[id] = None
-                    new_tweets.append(tweet)
-                    favorites.append(self.getTweetData(tweet))
+            id = tweet["id_str"]
+            if id in archive:
+                continue
+            else:
+                archive[id] = None
+                new_tweets.append(tweet)
+                favorites.append(self.getTweetData(tweet))
 
         print(str(len(favorites)) + " new favorites with images/videos")
 
@@ -261,19 +286,11 @@ class Likes:
                 + "] "
             )
             for idx, media in enumerate(tweet["media"]):
-                filename = re.sub("[^\\w# :\/\.]", " ", tweet["tweet"])
-                filename = re.sub("https?\\S+", "", filename)
-                filename = re.sub("[^\\w#]", " ", filename)
-                filename = re.sub(" +", " ", filename)
-                filename = filename[  # cut the tweet length because of long path errors in windows
-                    :140
-                ]
-                filename = date + filename + " - " + tweet_id + " - " + str(idx)
-                # filename = tweet_id #UNCOMMENT THIS LINE FOR TWEET ID AS FILENAME
+                filename = self.getFilename(date, tweet, idx, False, media["type"])
+                media["filename"] = filename
                 self.downloadMedia(
-                    tweet_id, media["type"], filename, media["url"],
+                    tweet_id, filename, media["url"],
                 )
         self.writeTweetData(new_tweets, favorites)
         self.updateArchive(archive)
         print("done")
-
