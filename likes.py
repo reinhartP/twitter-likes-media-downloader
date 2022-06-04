@@ -5,6 +5,8 @@ import json
 import requests
 import time
 import re
+import gzip
+import sqlite3
 
 
 class Likes:
@@ -14,7 +16,11 @@ class Likes:
         self._current_path = current_path
         self._force_redownload = force_redownload
         self._archives_path = os.path.join(current_path, "archives")
-        self._downloads_path = os.path.join(current_path, "downloads", screen_name)
+        self._downloads_path = os.path.join(
+            current_path, "downloads", screen_name)
+        conn = sqlite3.connect(os.path.join(os.path.normpath(
+            "C:\\Users\\gd\\Documents\\Projects\\Python\\TwitterListsScript"), "example.db"))
+        self.__cursor = conn.cursor()
 
     def loadArchive(self):
         """
@@ -93,7 +99,8 @@ class Likes:
                 if media_type == "video" or media_type == "animated_gif":
                     sorted_variants = sorted(  # sort by bitrate, 0 index will typically be m3u8, 1 is the highest bitrate
                         media["video_info"]["variants"],
-                        key=lambda i: ("bitrate" not in i, i.get("bitrate", None)),
+                        key=lambda i: ("bitrate" not in i,
+                                       i.get("bitrate", None)),
                         reverse=True,
                     )
                     index = 0
@@ -135,12 +142,26 @@ class Likes:
                 pass
             file_path = os.path.join(self._downloads_path, filename)
             if os.path.exists(file_path) == False:
-                with open(file_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 1024 * 10):
-                        if chunk:
-                            f.write(chunk)
+                while True:
+                    try:
+                        with open(file_path, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=1024 * 1024 * 10):
+                                if chunk:
+                                    f.write(chunk)
+                        break
+                    except OSError:
+                        filename = (
+                            filename.split("-")[-2].strip()
+                            + "."
+                            + filename.split(".")[-1]
+                        )
+                        file_path = os.path.join(
+                            self._downloads_path, filename)
+
             else:
-                print("tweet with id " + id + " already exists, skipping download")
+                print("tweet with id " + id +
+                      " already exists, skipping download")
+        return filename
 
     def updateArchive(self, archive):
         """
@@ -149,7 +170,8 @@ class Likes:
         while True:
             try:
                 with open(
-                    os.path.join(self._archives_path, self._screen_name + ".json"),
+                    os.path.join(self._archives_path,
+                                 self._screen_name + ".json"),
                     "w",
                     encoding="utf-8",
                 ) as f:
@@ -171,6 +193,10 @@ class Likes:
                 encoding="utf-8",
             ) as f:
                 old_timeline = json.load(f)
+                if len(old_timeline) > 0:
+                    with gzip.open(os.path.join(self._downloads_path, 'backup', f'timeline_bak_{time.strftime("%Y-%m-%d_%H.json.gz")}'), 'wt', encoding='utf-8') as f_bak:
+                        json.dump(old_timeline, f_bak,
+                                  ensure_ascii=False, indent=4)
         except FileNotFoundError:
             old_timeline = []
         while True:
@@ -180,7 +206,8 @@ class Likes:
                     "w",
                     encoding="utf-8",
                 ) as f:
-                    json.dump(old_timeline + timeline, f, ensure_ascii=False, indent=4)
+                    json.dump(old_timeline + timeline, f,
+                              ensure_ascii=False, indent=4)
                 break
             except FileNotFoundError:
                 os.makedirs(self._downloads_path)
@@ -195,13 +222,18 @@ class Likes:
                 encoding="utf-8",
             ) as f:
                 old_favorites = json.load(f)
+                if len(old_favorites) > 0:
+                    with gzip.open(os.path.join(self._downloads_path, 'backup', f'favorites_bak_{time.strftime("%Y-%m-%d_%H")}.json.gz'), 'wt', encoding='utf-8') as f_bak:
+                        json.dump(old_favorites, f_bak,
+                                  ensure_ascii=False, indent=4)
         except FileNotFoundError:
             old_favorites = []
 
         with open(
             os.path.join(self._downloads_path, "favorites.json"), "w", encoding="utf-8",
         ) as f:
-            json.dump(old_favorites + favorites, f, ensure_ascii=False, indent=4)
+            json.dump(old_favorites + favorites, f,
+                      ensure_ascii=False, indent=4)
 
     def writeTweetData(self, timeline, favorites):
         self.writeTimeline(timeline)
@@ -239,19 +271,20 @@ class Likes:
             tweet_text = re.sub(r"\n|:|/", " ", tweet_text).strip()
             tweet_text = re.sub(r" +", " ", tweet_text)
             tweet_text_length = 250 - (
-                len(date + " - " + tweet_id + " - " + str(idx)) + 4
+                len(date + "_" + tweet_id + "_" + str(idx)) + 4 + 80
             )
             filename = (
                 date
                 + tweet_text[  # cut the tweet length because of long path errors in windows
                     :tweet_text_length
                 ]
-                + " - "
+                + "_"
                 + tweet_id
-                + " - "
+                + "_"
                 + str(idx)
                 + ext
             )
+            filename = date + "_" + tweet_id + "_" + str(idx) + ext
             return filename
 
         return tweet_id
@@ -281,16 +314,18 @@ class Likes:
                 "["
                 + time.strftime(
                     "%Y-%m-%d",
-                    time.strptime(tweet["created_at"], "%a %b %d %H:%M:%S +0000 %Y"),
+                    time.strptime(tweet["created_at"],
+                                  "%a %b %d %H:%M:%S +0000 %Y"),
                 )
                 + "] "
             )
             for idx, media in enumerate(tweet["media"]):
-                filename = self.getFilename(date, tweet, idx, False, media["type"])
-                media["filename"] = filename
-                self.downloadMedia(
-                    tweet_id, filename, media["url"],
-                )
+                filename = self.getFilename(
+                    date, tweet, idx, False, media["type"])
+
+                actual_filename = self.downloadMedia(
+                    tweet_id, filename, media["url"],)
+                media["filename"] = actual_filename
         self.writeTweetData(new_tweets, favorites)
         self.updateArchive(archive)
         print("done")

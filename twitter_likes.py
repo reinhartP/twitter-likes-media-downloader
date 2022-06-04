@@ -1,11 +1,10 @@
 import argparse
-import configparser
 import twitter
 import os
 import json
 from likes import Likes
 import sys
-
+import time
 
 class Downloader:
     def __init__(self):
@@ -22,7 +21,7 @@ class Downloader:
             "access_token_key": "",
             "access_token_secret": "",
         }
-        with open("config.json", "w", encoding="utf-8") as f:
+        with open(os.path.join(self._current_path, "config.json"), "w", encoding="utf-8") as f:
             json.dump(base, f, ensure_ascii=False, indent=4)
         print("Config generated at config.json")
         sys.exit()
@@ -59,6 +58,10 @@ class Downloader:
         parser.add_argument(
             "-f", "--force", help="Redownloads all media", action="store_true"
         )
+        
+        parser.add_argument(
+            "-l", "--loop", help="Run forever", action="store_true"
+        )
 
         args = parser.parse_args()
 
@@ -74,7 +77,7 @@ class Downloader:
             config_name = args.config
 
         try:
-            with open(config_name, "r", encoding="utf-8") as f:
+            with open(os.path.join(self._current_path, config_name), "r", encoding="utf-8") as f:
                 config = json.load(f)
             api = twitter.Api(
                 consumer_key=config["consumer_key"],
@@ -89,9 +92,13 @@ class Downloader:
         except json.decoder.JSONDecodeError:
             raise
 
-        self.downloadLikes(api, args.user, args.force)
+        while True:
+            self.downloadLikes(api, args.user, args.force)
+            if not args.loop:
+                break
+            print(f"[{time.strftime('%m/%d/%Y %H:%M:%S', time.localtime())}] Running again in 1 hour")
+            time.sleep(60*60)
 
 
 downloader = Downloader()
 downloader.main()
-
