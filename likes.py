@@ -18,9 +18,11 @@ class Likes:
         self._archives_path = os.path.join(current_path, "archives")
         self._downloads_path = os.path.join(
             current_path, "downloads", screen_name)
-        conn = sqlite3.connect(os.path.join(os.path.normpath(
-            "C:\\Users\\gd\\Documents\\Projects\\Python\\TwitterListsScript"), "example.db"))
-        self.__cursor = conn.cursor()
+        self.__conn = sqlite3.connect(os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "tweets.db"))
+        # self.__conn = sqlite3.connect(os.path.join(os.path.normpath(
+        #     "C:\\Users\\gd\\Documents\\Projects\\Python\\TwitterListsScript"), "example.db"))
+        self.__cursor = self.__conn.cursor()
 
     def loadArchive(self):
         """
@@ -30,27 +32,20 @@ class Likes:
                 Gives the user the option to reset the archive and download all media again
             Checks if the file exists, if it doesn't then it loads an empty dict
         """
+        import pandas as pd
+        tweets = pd.read_sql_query(
+            """select tweet_id as tweet_id from likes;""", self.__conn)
+        tweet_ids = set([row['tweet_id']
+                        for index, row in tweets.iterrows()])
+        return tweet_ids
+
+    def createTable(self):
         try:
-            with open(
-                os.path.join(self._archives_path, self._screen_name + ".json"),
-                "r",
-                encoding="utf-8",
-            ) as f:
-                archive = json.load(f)
-        except json.decoder.JSONDecodeError:
-            print(
-                "There was a problem with the archive file. Proceed to clear archive and redownload all media or exit."
+            self.__cursor.execute(
+                """CREATE TABLE likes (created_at DATETIME NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')), tweet_id text NOT NULL, tweet_data json NOT NULL, filenames json NOT NULL)"""
             )
-            user_input = None
-            while user_input != "n" and user_input != "y":
-                user_input = str(input("Proceed (y/n)?: ")).lower()
-            if user_input == "n":
-                print("exiting")
-                sys.exit()
-            archive = dict()
-        except FileNotFoundError:
-            archive = dict()
-        return archive
+        except sqlite3.OperationalError:
+            pass
 
     def getFavorites(self, max_id):
         return self._api.GetFavorites(
@@ -163,27 +158,6 @@ class Likes:
                       " already exists, skipping download")
         return filename
 
-    def updateArchive(self, archive):
-        """
-            Update archive file for user with new liked tweets
-        """
-        while True:
-            try:
-                with open(
-                    os.path.join(self._archives_path,
-                                 self._screen_name + ".json"),
-                    "w",
-                    encoding="utf-8",
-                ) as f:
-                    json.dump(archive, f, ensure_ascii=False, indent=4)
-                break
-            except FileNotFoundError:
-                try:
-                    os.makedirs(self._archives_path)
-                    continue
-                except FileExistsError:
-                    pass
-
     def writeTimeline(self, timeline):
         # Writes new liked tweets to timeline.json with all data from api
         try:
@@ -194,9 +168,10 @@ class Likes:
             ) as f:
                 old_timeline = json.load(f)
                 if len(old_timeline) > 0:
-                    with gzip.open(os.path.join(self._downloads_path, 'backup', f'timeline_bak_{time.strftime("%Y-%m-%d_%H.json.gz")}'), 'wt', encoding='utf-8') as f_bak:
-                        json.dump(old_timeline, f_bak,
-                                  ensure_ascii=False, indent=4)
+                    pass  # create backup of timeline.json
+                    # with gzip.open(os.path.join(self._downloads_path, 'backup', f'timeline_bak_{time.strftime("%Y-%m-%d_%H.json.gz")}'), 'wt', encoding='utf-8') as f_bak:
+                    #     json.dump(old_timeline, f_bak,
+                    #               ensure_ascii=False, indent=4)
         except FileNotFoundError:
             old_timeline = []
         while True:
@@ -223,9 +198,10 @@ class Likes:
             ) as f:
                 old_favorites = json.load(f)
                 if len(old_favorites) > 0:
-                    with gzip.open(os.path.join(self._downloads_path, 'backup', f'favorites_bak_{time.strftime("%Y-%m-%d_%H")}.json.gz'), 'wt', encoding='utf-8') as f_bak:
-                        json.dump(old_favorites, f_bak,
-                                  ensure_ascii=False, indent=4)
+                    pass  # create backup of favorites.json
+                    # with gzip.open(os.path.join(self._downloads_path, 'backup', f'favorites_bak_{time.strftime("%Y-%m-%d_%H")}.json.gz'), 'wt', encoding='utf-8') as f_bak:
+                    #     json.dump(old_favorites, f_bak,
+                    #               ensure_ascii=False, indent=4)
         except FileNotFoundError:
             old_favorites = []
 
@@ -235,9 +211,26 @@ class Likes:
             json.dump(old_favorites + favorites, f,
                       ensure_ascii=False, indent=4)
 
+    def addToDb(self, favorites):
+        for favorite in favorites:
+            filenames = []
+            for media in favorite['media']:
+                if 'filename' in media:
+                    filenames.append(media['filename'])
+            try:
+                self.__cursor.execute("insert into likes ('tweet_id', 'tweet_data', 'filenames') values (?,?,?)", [
+                    favorite['id_str'], json.dumps(favorite), json.dumps({"filenames": filenames})])
+            except sqlite3.InterfaceError:
+                print(json.dumps(favorite, indent=4), json.dumps(filenames, indent=4),
+                      favorite['id_str'])
+                raise
+        self.__conn.commit()
+        pass
+
     def writeTweetData(self, timeline, favorites):
         self.writeTimeline(timeline)
         self.writeFavorites(favorites)
+        self.addToDb(favorites)
 
     def reset(self):
         with open(
@@ -296,13 +289,12 @@ class Likes:
         timeline = self.getAllFavorites()
         new_tweets = []
         favorites = []
-
         for idx, tweet in enumerate(timeline):
             id = tweet["id_str"]
             if id in archive:
                 continue
             else:
-                archive[id] = None
+                archive.add(id)
                 new_tweets.append(tweet)
                 favorites.append(self.getTweetData(tweet))
 
@@ -317,7 +309,7 @@ class Likes:
                     time.strptime(tweet["created_at"],
                                   "%a %b %d %H:%M:%S +0000 %Y"),
                 )
-                + "] "
+                + "]"
             )
             for idx, media in enumerate(tweet["media"]):
                 filename = self.getFilename(
@@ -327,5 +319,4 @@ class Likes:
                     tweet_id, filename, media["url"],)
                 media["filename"] = actual_filename
         self.writeTweetData(new_tweets, favorites)
-        self.updateArchive(archive)
         print("done")

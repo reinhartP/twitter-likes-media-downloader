@@ -6,12 +6,15 @@ from likes import Likes
 import sys
 import time
 
+
 class Downloader:
     def __init__(self):
         self._current_path = os.path.dirname(os.path.realpath(__file__))
 
     def downloadLikes(self, api, screen_name, force_redownload):
-        liked_tweets = Likes(api, screen_name, self._current_path, force_redownload)
+        liked_tweets = Likes(
+            api, screen_name, self._current_path, force_redownload)
+        liked_tweets.createTable()
         liked_tweets.download()
 
     def generateConfig(self):
@@ -58,7 +61,7 @@ class Downloader:
         parser.add_argument(
             "-f", "--force", help="Redownloads all media", action="store_true"
         )
-        
+
         parser.add_argument(
             "-l", "--loop", help="Run forever", action="store_true"
         )
@@ -75,7 +78,6 @@ class Downloader:
 
         if args.config:
             config_name = args.config
-
         try:
             with open(os.path.join(self._current_path, config_name), "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -91,13 +93,14 @@ class Downloader:
             raise
         except json.decoder.JSONDecodeError:
             raise
-
+        print(args.loop)
         while True:
             self.downloadLikes(api, args.user, args.force)
             if not args.loop:
                 break
-            print(f"[{time.strftime('%m/%d/%Y %H:%M:%S', time.localtime())}] Running again in 1 hour")
-            time.sleep(60*60)
+            print(
+                f"[{time.strftime('%m/%d/%Y %H:%M:%S', time.localtime())}] Running again in 30 minutes")
+            time.sleep(30*60)
 
 
 downloader = Downloader()
